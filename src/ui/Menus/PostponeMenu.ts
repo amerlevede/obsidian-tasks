@@ -1,4 +1,4 @@
-import { MenuItem, Notice } from 'obsidian';
+import { MenuItem, Notice, type App } from 'obsidian';
 import type { Moment, unitOfTime } from 'moment/moment';
 import type { Task } from '../../Task/Task';
 import {
@@ -85,6 +85,13 @@ export class PostponeMenu extends TaskEditingMenu {
         this.addItem((item) =>
             postponeMenuItemCallback(button, item, 'days', 2, removeDateMenuItemTitle, createTaskWithDateRemoved),
         );
+
+        this.addSeparator();
+
+        this.addItem((item) => {
+            item.setTitle('Move here')
+                .onClick(() => PostponeMenu.moveTaskHereCallback(button, task, taskSaver));
+        });
     }
 
     public static async postponeOnClickCallback(
@@ -121,5 +128,64 @@ export class PostponeMenu extends TaskEditingMenu {
 
         const successMessage = postponementSuccessMessage(postponedDate, updatedDateType);
         new Notice(successMessage, 2000);
+    }
+
+    /**
+     * Moves a task from its original location to the current active note.
+     * Completes the original task and adds a link to the current note.
+     * 
+     * @param button - The button that triggered the action
+     * @param task - The task to be moved
+     * @param taskSaver - Function to save the task changes
+     */
+    public static async moveTaskHereCallback(
+        button: HTMLAnchorElement,
+        task: Task,
+        taskSaver: TaskSaver = defaultTaskSaver,
+    ) {
+        // Disable the button to prevent update error due to the task not being reloaded yet
+        button.style.pointerEvents = 'none';
+
+        try {
+            // Get the app instance and active file
+            const app = (window as any).app as App;
+            const activeFile = app.workspace.getActiveFile();
+            if (!activeFile) {
+                new Notice('⚠️ No active file found. Please open a note first.', 5000);
+                button.style.pointerEvents = '';
+                return;
+            }
+
+            // Create a modified version of the original task with a link to the current note
+            // Since we can't use 'new Task()' (type-only import), we'll create a modified copy
+            const completedTask = Object.assign({}, task, {
+                status: app.plugins.getPlugin('obsidian-tasks-plugin')?.statusRegistry?.getStatusBySymbol('x') ?? task.status,
+                description: `${task.description} [[${activeFile.basename}]]`
+            });
+
+            // Save the completed task in the original location
+            await taskSaver(task, completedTask);
+
+            // Get the content of the active file
+            const fileContent = await app.vault.read(activeFile);
+
+            // Prepare the task to be added to the current note
+            const newTaskContent = task.toFileLineString();
+
+            // Add the task at the end of the file
+            const updatedContent = fileContent + '\n' + newTaskContent;
+
+            // Write the updated content back to the file
+            await app.vault.modify(activeFile, updatedContent);
+
+            // Show success message
+            new Notice(`✅ Task moved to "${activeFile.basename}"`, 2000);
+        } catch (error: unknown) {
+            console.error('Error moving task:', error);
+            new Notice(`⚠️ Error moving task: ${error instanceof Error ? error.message : String(error)}`, 5000);
+        } finally {
+            // Re-enable the button
+            button.style.pointerEvents = '';
+        }
     }
 }
